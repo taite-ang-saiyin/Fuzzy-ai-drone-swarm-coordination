@@ -1,0 +1,145 @@
+#VRML_SIM R2025a utf8
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/GlossyPaint.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/MattePaint.proto"
+
+PROTO MyMavic2Pro [
+  field SFVec3f    translation         0 0 0.065
+  field SFRotation rotation            0 0 1 0
+  field SFString   name                "Mavic 2 PRO"
+  field SFString   controller          "mavic_controller"
+  field MFString   controllerArgs      []
+  field SFString   window              "<generic>"
+  field SFString   customData          ""
+  field SFBool     supervisor          FALSE
+  field SFBool     synchronization     TRUE
+  field MFFloat    battery             []
+  field MFNode     bodySlot            []
+]
+{
+Robot {
+  translation IS translation
+  rotation IS rotation
+  children [
+    DEF BODY_SLOT Group {
+      children IS bodySlot
+    }
+    # --- Custom sensors/devices below ---
+    Receiver {
+      name "receiver_custom"
+      channel 1
+      type "radio"
+    }
+    RangeFinder {
+      name "range finder custom"
+    }
+    DistanceSensor {
+      name "front distance sensor custom"
+      translation 0 0 0.2
+      rotation 0 1 0 0
+    }
+    DistanceSensor {
+      name "back distance sensor custom"
+      translation 0 0 -0.2
+      rotation 0 1 0 3.14159
+    }
+    DistanceSensor {
+      name "left distance sensor custom"
+      translation -0.2 0 0
+      rotation 0 1 0 1.5708
+    }
+    DistanceSensor {
+      name "right distance sensor custom"
+      translation 0.2 0 0
+      rotation 0 1 0 -1.5708
+    }
+    # --- End custom sensors/devices ---
+  ]
+  name IS name
+  model "DJI Mavic 2 PRO"
+  boundingObject Group {
+    children [
+      Pose {
+        translation -0.03 0 0.002
+        children [
+          Box {
+            size 0.21 0.085 0.027
+          }
+        ]
+      }
+      Pose {
+        translation -0.06 0 -0.03
+        children [
+          Box {
+            size 0.15 0.06 0.053
+          }
+        ]
+      }
+      Pose {
+        translation 0.03 0.09 -0.001
+        rotation 0 0 1 -0.3926996938995747
+        children [
+          Box {
+            size 0.01 0.15 0.025
+          }
+        ]
+      }
+      Pose {
+        translation 0.03 -0.09 -0.001
+        rotation 0 0 1 0.3927
+        children [
+          Box {
+            size 0.01 0.15 0.025
+          }
+        ]
+      }
+      Pose {
+        translation -0.138 0.08 -0.032
+        rotation 0 0 1 0.68
+        children [
+          Box {
+            size 0.01 0.12 0.018
+          }
+        ]
+      }
+      Pose {
+        translation -0.138 -0.08 -0.032
+        rotation 0 0 1 -0.68
+        children [
+          Box {
+            size 0.01 0.12 0.018
+          }
+        ]
+      }
+      Pose {
+        translation 0.06 0.15 -0.039
+        rotation 1 0 0 -0.29
+        children [
+          Box {
+            size 0.01 0.014 0.06
+          }
+        ]
+      }
+      Pose {
+        translation 0.06 -0.15 -0.039
+        rotation 1 0 0 0.29
+        children [
+          Box {
+            size 0.01 0.014 0.06
+          }
+        ]
+      }
+    ]
+  }
+  physics Physics {
+  }
+  controller IS controller
+  controllerArgs IS controllerArgs
+  window IS window
+  customData IS customData
+  supervisor IS supervisor
+  synchronization IS synchronization
+  battery IS battery
+}
+}
+
+

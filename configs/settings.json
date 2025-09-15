@@ -1,0 +1,45 @@
+{
+  "num_drones": 5,
+  "simulation": {
+    "time_step": 0.1,
+    "world_file": "mavic_2_pro.wbt",
+    "duration_s": 30,
+    "max_speed": 100.0,
+    "max_force": 40.0,
+    "init_ring_radius": 8.0,
+    "init_altitude": 2.0
+  },
+  "swarm": {
+    "cohesion_weight": 1.0,
+    "alignment_weight": 0.6,
+    "separation_weight": 1.8,
+    "goal_weight": 0.3,
+    "safe_distance": 4.0,
+    "perception_radius": 25.0,
+    "fov_deg": 270.0
+  },
+  "comm": {
+    "host": "127.0.0.1",
+    "base_port": 51000,
+    "hz": 10,
+    "timeout": 0.1,
+    "recv_buf": 65536
+  },
+  "fuzzy": {
+    "distance_range": [0.0, 1.0, 0.01],
+    "yaw_range": [-1.0, 1.0, 0.01],
+    "very_close": [0.0, 0.0, 0.2, 0.4],
+    "close": [0.2, 0.5, 0.9],
+    "far": [0.8, 1.0, 1.0, 1.0]
+  },
+  "rl": {
+    "enabled": false,
+    "reward_weights": {
+      "collision": -50.0,
+      "cohesion": -2.0,
+      "goal": 10.0,
+      "smoothness": -1.0
+    }
+  }
+}
+

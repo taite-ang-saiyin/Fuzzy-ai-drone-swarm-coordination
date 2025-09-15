@@ -1,0 +1,5 @@
+numpy
+matplotlib
+scikit-fuzzy
+stable-baselines3
+webots
