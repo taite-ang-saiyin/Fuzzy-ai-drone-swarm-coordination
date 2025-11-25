@@ -3,6 +3,7 @@ import os
 import numpy as np
 import random
 import struct
+import json
 
 # Go up from controllers/mavic_controller/ to project root
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -99,13 +100,14 @@ back_ds = try_get_and_enable("back distance sensor")
 left_ds = try_get_and_enable("left distance sensor")
 right_ds = try_get_and_enable("right distance sensor")
 
-# Receiver for AI commands (may not exist in PROTO)
+# Receiver/Emitter for supervisor commands/telemetry (may not exist in PROTO)
 receiver = robot.getDevice("receiver")
 if receiver is not None:
     try:
         receiver.enable(timestep)
     except Exception:
         pass
+emitter = robot.getDevice("emitter") if hasattr(robot, "getDevice") else None
 
 front_left_motor  = robot.getDevice("front left propeller")
 front_right_motor = robot.getDevice("front right propeller")
@@ -149,6 +151,8 @@ yaw_rate = 0.0
 # === Velocity computation (for boids) ===
 last_pos = np.array(gps.getValues())
 last_time = robot.getTime()
+latest_command = {"goal": None, "velocity": None, "mode": None}
+last_command_time = -1.0
 
 def get_observation():
     """Get observation for AI decision making"""
@@ -353,28 +357,70 @@ def apply_policy(action, observation):
         return thrust_adjustment, yaw_rate
 
 def check_receiver():
-    """Check for AI commands from receiver"""
-    global current_action, current_thrust, current_yaw
+    """
+    Check for supervisor/AI commands on the Webots receiver.
+    Supports JSON payloads:
+      {"id": "drone0", "target_pos": [x,y,z], "target_vel": [vx,vy,vz], "mode": "hold"}
+    Falls back to legacy struct floats (thrust, yaw) for compatibility.
+    """
+    global latest_command, last_command_time
 
-    if receiver is not None and receiver.getQueueLength() > 0:
+    if receiver is None:
+        return None
+
+    while receiver.getQueueLength() > 0:
         data = receiver.getData()
-        if DRONE_ID == 'drone2':
-            print(f"[DEBUG] Raw receiver data: {data} (type: {type(data)})")
         try:
-            if len(data) >= 8:
-                thrust, yaw = struct.unpack('ff', data[:8])
-                current_thrust = thrust
-                current_yaw = yaw
+            msg = json.loads(data.decode("utf-8"))
+            target_id = msg.get("id")
+            if target_id is None or target_id == DRONE_ID:
+                latest_command = {
+                    "goal": np.array(msg["target_pos"]) if "target_pos" in msg else latest_command["goal"],
+                    "velocity": np.array(msg["target_vel"]) if "target_vel" in msg else latest_command["velocity"],
+                    "mode": msg.get("mode", latest_command["mode"])
+                }
+                last_command_time = robot.getTime()
                 if DRONE_ID == 'drone2':
-                    print(f"[{DRONE_ID}] Received thrust: {thrust}, yaw: {yaw}")
-            else:
+                    print(f"[{DRONE_ID}] Received JSON cmd: {msg}")
+        except Exception:
+            # Legacy binary: thrust, yaw
+            try:
+                if len(data) >= 8:
+                    thrust, yaw = struct.unpack('ff', data[:8])
+                    latest_command["velocity"] = None  # legacy doesn't set velocity
+                    latest_command["goal"] = None
+                    latest_command["mode"] = None
+                    last_command_time = robot.getTime()
+                    if DRONE_ID == 'drone2':
+                        print(f"[{DRONE_ID}] Received legacy thrust/yaw: {thrust}, {yaw}")
+                else:
+                    if DRONE_ID == 'drone2':
+                        print(f"[{DRONE_ID}] Received data too short: {len(data)} bytes")
+            except Exception as e:
                 if DRONE_ID == 'drone2':
-                    print(f"[{DRONE_ID}] Received data too short: {len(data)} bytes")
-        except Exception as e:
-            if DRONE_ID == 'drone2':
-                print(f"[{DRONE_ID}] Receiver unpack failed: {e}")
+                    print(f"[{DRONE_ID}] Receiver unpack failed: {e}")
         receiver.nextPacket()
-    return current_action
+    return None
+
+
+def send_telemetry(position, velocity, distances, goal):
+    """Lightweight telemetry back to supervisor via emitter (if present)."""
+    if emitter is None:
+        return
+    if robot.getTime() % 0.5 > (timestep / 1000.0):  # ~2 Hz
+        return
+    try:
+        payload = {
+            "id": DRONE_ID,
+            "t": robot.getTime(),
+            "pos": position.tolist(),
+            "vel": velocity.tolist(),
+            "distances": distances,
+            "goal": goal.tolist() if goal is not None else None
+        }
+        emitter.send(json.dumps(payload).encode("utf-8"))
+    except Exception:
+        pass
 
 
 # === Main simulation loop ===
@@ -419,6 +465,15 @@ while robot.step(timestep) != -1:
 
     # --- Get observation for AI ---
     observation = get_observation()
+
+    # Apply fresh supervisor command if available
+    cmd_goal = None
+    cmd_vel = None
+    if last_command_time >= 0 and (robot.getTime() - last_command_time) < 2.0:
+        cmd_goal = latest_command.get("goal")
+        cmd_vel = latest_command.get("velocity")
+    if cmd_goal is not None:
+        observation['goal'] = cmd_goal
     # Print sensor data every step for debugging
     print(f"[{DRONE_ID}] SENSOR DEBUG: front={observation['distances'][0]:.2f}, back={observation['distances'][1]:.2f}, left={observation['distances'][2]:.2f}, right={observation['distances'][3]:.2f}")
 
@@ -435,7 +490,7 @@ while robot.step(timestep) != -1:
     fuzzy_thrust = fuzzy_outputs.get('thrust_adjustment', 0.0)
     fuzzy_yaw = fuzzy_outputs.get('yaw_rate', 0.0)
     
-    # Get goal information
+    # Get goal information (override with supervisor command if present)
     goal = observation['goal']
     goal_dx, goal_dy, goal_dz = goal - observation['position']
     distance_to_goal = np.linalg.norm([goal_dx, goal_dy, goal_dz])
@@ -479,6 +534,10 @@ while robot.step(timestep) != -1:
                 # This drone is further from goal (rear) - stop
                 should_stop = True
                 print(f"[{DRONE_ID}] STOP-AND-WAIT: Too close to {closest_drone_id} ({min_distance:.2f}m < {MIN_SAFE_DISTANCE}m). This drone is rear (further from goal), stopping.")
+
+    # Supervisor hold mode overrides motion briefly after command receipt
+    if (robot.getTime() - last_command_time) < 2.0 and latest_command.get("mode") == "hold":
+        should_stop = True
     
     if is_leader:
         # Leader: prioritize goal-seeking with obstacle avoidance
@@ -651,6 +710,7 @@ while robot.step(timestep) != -1:
     # --- Communication & Formation Coordination ---
     comm.broadcast(current_pos, vel)
     world = comm.snapshot()
+    send_telemetry(current_pos, vel, observation['distances'], goal)
     
     # Use boids for additional formation coordination (secondary to leader-follower)
     if not emergency_triggered:  # Only use boids when not in emergency avoidance

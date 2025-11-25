@@ -1,0 +1,61 @@
+#VRML_SIM R2025a utf8
+
+WorldInfo {
+  title "Fuzzy Swarm Multi-Drone"
+  basicTimeStep 32
+}
+
+Viewpoint {
+  orientation 0.577 0.577 0.577 2.094
+  position 12 10 18
+  follow "drone0"
+  followSmoothness 0.2
+}
+
+TexturedBackground {
+}
+TexturedBackgroundLight {
+}
+
+Floor {
+  translation 0 0 0
+  size 50 50
+}
+
+# Five drones with unique names/DEFs so controllers can derive ports and Supervisor can find them
+DEF drone0 Mavic2Pro {
+  translation 0 0 1.2
+  name "drone0"
+  controller "mavic_controller"
+}
+
+DEF drone1 Mavic2Pro {
+  translation 3 0 1.2
+  name "drone1"
+  controller "mavic_controller"
+}
+
+DEF drone2 Mavic2Pro {
+  translation -3 0 1.2
+  name "drone2"
+  controller "mavic_controller"
+}
+
+DEF drone3 Mavic2Pro {
+  translation 0 3 1.2
+  name "drone3"
+  controller "mavic_controller"
+}
+
+DEF drone4 Mavic2Pro {
+  translation 0 -3 1.2
+  name "drone4"
+  controller "mavic_controller"
+}
+
+# Optional supervisor to orchestrate formation/Boids targets
+Robot {
+  name "multi_supervisor"
+  controller "multi_agent_sim"
+  supervisor TRUE
+}

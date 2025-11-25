@@ -2,12 +2,14 @@ import sys
 import os
 import numpy as np
 import random
+import json
 
 # Go up from controllers/mavic_controller/ to project root
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.append(PROJECT_ROOT)
 
 from controller import Robot
+from controller import Receiver, Emitter
 from agents.comm import UdpPeer
 from agents import boids
 from agents.config import get_config
@@ -68,6 +70,12 @@ for motor in motors:
     motor.setPosition(float("inf"))
     motor.setVelocity(0.0)  # Start with zero velocity to prevent immediate thrust
 
+# Optional radio bridge (for supervisor commands/telemetry). Safe to ignore if absent in world.
+rx_device = robot.getDevice("receiver") if robot.getDevice("receiver") else None
+if isinstance(rx_device, Receiver):
+    rx_device.enable(timestep)
+tx_device = robot.getDevice("emitter") if robot.getDevice("emitter") else None
+
 # === Control constants ===
 K_VERTICAL_THRUST = 70.0
 K_VERTICAL_OFFSET = 0.6
@@ -92,6 +100,48 @@ waypoint_manager = WaypointManager(global_waypoints=[
 # === Velocity computation ===
 last_pos = np.array(gps.getValues()) if gps is not None else np.zeros(3)
 last_time = robot.getTime()
+latest_command = {"goal": None, "velocity": None, "mode": None}
+last_command_time = -1.0
+
+# --- Helper: decode supervisor commands (JSON bytes) ---
+def _poll_supervisor_command():
+    global latest_command, last_command_time
+    if rx_device is None:
+        return
+    while rx_device.getQueueLength() > 0:
+        packet = rx_device.getData()
+        try:
+            msg = json.loads(packet.decode("utf-8"))
+            target_id = msg.get("id")
+            if target_id is None or target_id == DRONE_ID:
+                latest_command = {
+                    "goal": np.array(msg["target_pos"]) if "target_pos" in msg else latest_command["goal"],
+                    "velocity": np.array(msg["target_vel"]) if "target_vel" in msg else latest_command["velocity"],
+                    "mode": msg.get("mode", latest_command["mode"])
+                }
+                last_command_time = robot.getTime()
+        except Exception:
+            pass
+        rx_device.nextPacket()
+
+# --- Helper: emit lightweight telemetry back to supervisor ---
+def _send_telemetry(position, velocity, distances, goal):
+    if tx_device is None:
+        return
+    if robot.getTime() % 0.5 > (timestep / 1000.0):  # ~2 Hz
+        return
+    try:
+        payload = {
+            "id": DRONE_ID,
+            "t": robot.getTime(),
+            "pos": position.tolist(),
+            "vel": velocity.tolist(),
+            "distances": distances,
+            "goal": goal.tolist() if goal is not None else None
+        }
+        tx_device.send(json.dumps(payload).encode("utf-8"))
+    except Exception:
+        pass
 
 def get_observation():
     """Get observation for decision making"""
@@ -181,12 +231,18 @@ def get_observation():
 
 # === Main simulation loop ===
 while robot.step(timestep) != -1:
+    _poll_supervisor_command()
     # Get observation
     observation = get_observation()
     position = observation['position']
     distances = observation['distances']
     nearest_neighbor_distance = observation['nearest_neighbor_distance']
-    goal = observation['goal']
+    cmd_goal = None
+    cmd_vel = None
+    if last_command_time >= 0 and (robot.getTime() - last_command_time) < 2.0:
+        cmd_goal = latest_command.get("goal")
+        cmd_vel = latest_command.get("velocity")
+    goal = cmd_goal if cmd_goal is not None else observation['goal']
     
     # Apply fuzzy controller for obstacle avoidance
     fuzzy_output = fuzzy_controller.get_advanced_avoidance_policy(
@@ -251,10 +307,17 @@ while robot.step(timestep) != -1:
                 # This drone is further from goal (rear) - stop
                 should_stop = True
                 print(f"[{DRONE_ID}] STOP-AND-WAIT: Too close to {closest_drone_id} ({min_distance:.2f}m < {MIN_SAFE_DISTANCE}m). This drone is rear (further from goal), stopping.")
+
+    # Optional supervisor "hold" command (fresh only)
+    if (robot.getTime() - last_command_time) < 2.0 and latest_command.get("mode") == "hold":
+        should_stop = True
+        thrust_adj = 0.0
+        yaw_rate = 0.0
+        roll_adj = 0.0
     
     # Calculate goal-seeking
-    goal_vector = goal - position
-    distance_to_goal = np.linalg.norm(goal_vector[:2])
+    goal_vector = goal - position if goal is not None else np.zeros(3)
+    distance_to_goal = np.linalg.norm(goal_vector[:2]) if goal is not None else 0.0
     
     # Leader-follower behavior
     is_leader = observation['is_leader']
@@ -400,9 +463,13 @@ while robot.step(timestep) != -1:
     if distance_to_goal < 2.0:
         waypoint_manager.global_goal_reached(position, thresh=2.0)
     
+    # Telemetry back to supervisor (if emitter exists)
+    _send_telemetry(position, vel, distances, goal)
+
     # Debug output
     if robot.getTime() % 2.0 < 0.1:  # Print every 2 seconds
-        print(f"[{DRONE_ID}] Pos: {position[:2]}, Goal: {goal[:2]}, Dist: {distance_to_goal:.1f}m")
+        goal_print = goal[:2] if goal is not None else ("N/A", "N/A")
+        print(f"[{DRONE_ID}] Pos: {position[:2]}, Goal: {goal_print}, Dist: {distance_to_goal:.1f}m")
         print(f"[{DRONE_ID}] Sensors: F={distances[0]:.2f}, B={distances[1]:.2f}, L={distances[2]:.2f}, R={distances[3]:.2f}")
         print(f"[{DRONE_ID}] Controls: T={thrust_adj:.2f}, Y={yaw_rate:.2f}, R={roll_adj:.2f}")
 
